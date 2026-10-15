@@ -1,0 +1,15 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = false
+
+# PowerShell 5.1 需要有 BOM 才能正确按 UTF-8 解析中文
+[*.ps1]
+charset = utf-8-bom
+
+[*.vbs]
+indent_size = 4

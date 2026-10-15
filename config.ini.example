@@ -1,0 +1,69 @@
+﻿# 中国海洋大学校园网自动登录 —— 配置模板
+# 使用方法：把本文件复制成 config.ini，填上自己的学号与密码即可（也可直接跑 setup 命令）。
+# 格式：键 = 值。以 # 或 ; 开头的行是注释。改完直接保存，不用重启任务。
+# 注意：config.ini 里存的是明文密码，别拷给别人、别放进网盘或 git（仓库已把 config.ini 加进 .gitignore）。
+
+# 校园网账号（学号 / 工号）
+Username =
+
+# 校园网密码（不要以空格开头或结尾）
+Password =
+
+# 认证门户。auto = 掉线时按网络重定向自动判定，判定不出来再按下面的候选顺序试。
+# 也可以写死你校区的门户，例如：PortalBase = http://192.168.101.201:801
+PortalBase = auto
+
+# 候选门户地址（逗号分隔，按顺序试）。西海岸在前，崂山在后。
+PortalCandidates = http://192.168.101.201:801,https://10.100.29.2:802
+
+# relogin（注销后重登）要试的注销接口路径，逗号分隔。门户没公开这个地址，所以逐个试、每试一个就复查是否真掉线。
+LogoutUrls = /eportal/portal/logout,/eportal/?c=ACSetting&a=Logout&ver=1.0
+
+# 用来查“认证系统看到你的哪个 IP”的地址（全校统一，崂山的认证服务器上）
+IpProbeUrl = https://wxrz.ouc.edu.cn/
+
+# 联网检测地址，逗号分隔按顺序试。掉线时第一个通常会被重定向到认证页。
+CheckUrls = http://baidu.com,https://www.apple.com/library/test/success.html
+
+# 判定“这是校园网认证页”的特征（正则，| 分隔）
+PortalPattern = eportal|dr\.com|10\.100\.29\.2|192\.168\.101\.201|wxrz\.ouc\.edu\.cn
+
+# 单个 HTTP 请求超时（秒）
+TimeoutSeconds = 10
+
+# 常驻计划任务的检测间隔（分钟），install / setup 时生效
+IntervalMinutes = 1
+
+# 连续认证失败时是否弹右下角提醒（1 = 弹，0 = 只写日志）
+NotifyOnFailure = 1
+
+# ---------------------------------------------------------------------------
+# 有线不通时自动切无线
+# “有线不通”的判定：有线网卡没有默认路由 —— 没插网线、拿不到 DHCP 地址（只剩 169.254 的地址）都算。
+# 有线正常时完全不动无线；有线恢复后 Windows 会按接口度量自己优先走有线。
+WifiFallback = 1
+
+# 校园网无线 SSID，以及它在 Windows 里的无线配置文件名字（一般两者一样）
+WifiSsid = OUC-AUTO
+WifiProfile = OUC-AUTO
+
+# 发出连接请求后最多等多少秒判定没连上
+WifiConnectTimeoutSeconds = 25
+
+# 连不上后的冷却时间（秒）
+WifiCooldownSeconds = 300
+
+# ---------------------------------------------------------------------------
+# 断线自愈：探网结果说链路不通时才会动网卡
+# 无线自查“能用”但探网不通（关联已死、Windows 仍留旧 IP 与路由）时，连续不通满这么多秒才断开重连一次
+WifiOfflineGraceSeconds = 30
+# 同一段断网里重复强制重连的冷却：第 n 次冷却 = WifiReassocCooldownSeconds x n，上限 WifiReassocCooldownMaxSeconds
+WifiReassocCooldownSeconds = 60
+WifiReassocCooldownMaxSeconds = 300
+
+# 认证失败退避上限（秒）；门户无响应（HTTP 0）不计入失败次数，所以这里不需要放很长
+BackoffMaxSeconds = 120
+
+# 快速重试窗口：链路不通时不等下一个任务 tick，脚本内每这么多秒复探一次，最多蹲守这么多秒
+WifiWatchSeconds = 240
+WifiWatchIntervalSeconds = 10

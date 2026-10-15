@@ -1,0 +1,22 @@
+# 本地配置：含明文账号密码，绝不入库
+config.ini
+
+# 备份与临时文件
+*.bak
+*.bak-*
+*.tmp
+
+# 运行期文件（正常情况下写在 %LOCALAPPDATA%\OUC-AutoLogin，
+# 若该目录取不到会退回脚本目录下的 logs\）
+logs/
+state.json
+wifi-reassoc.json
+*.stamp
+launcher-error.log
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini

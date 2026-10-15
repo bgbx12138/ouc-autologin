@@ -1,0 +1,11 @@
+* text=auto
+
+# 主脚本必须保留 UTF-8 BOM + LF：Windows PowerShell 5.1 在没有 BOM 时按 GBK 解析，
+# 中文会乱码并直接语法报错。这里固定换行，避免不同平台 clone 后出现整篇 diff。
+*.ps1 text eol=lf
+
+# 启动器保持原字节（Windows Script Host 对 CRLF/LF 都能识别，不做转换）
+*.vbs -text
+
+*.ini text eol=lf
+*.md text eol=lf
