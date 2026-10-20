@@ -79,10 +79,10 @@
 | `Username` | *(留空)* | 学号 / 工号 |
 | `Password` | *(留空)* | 校园网密码，明文存放（见"安全提示"） |
 | `PortalBase` | `auto` | `auto` = 掉线时按网关重定向自动判定；也可写死某个门户 |
-| `PortalCandidates` | `http://192.168.101.201:801,https://10.100.29.2:802` | 候选门户，按顺序试（西海岸在前、崂山在后） |
+| `PortalCandidates` | 见 `config.ini.example` | 候选门户，按顺序试（主校区在前、备用在后） |
 | `IpProbeUrl` | `https://wxrz.ouc.edu.cn/` | 用来问"认证系统看到你的哪个 IP"，页面上报的地址优先于本机地址 |
 | `CheckUrls` | `http://baidu.com,https://www.apple.com/library/test/success.html` | 联网探测地址，掉线时第一个通常会被重定向到认证页 |
-| `PortalPattern` | `eportal\|dr\.com\|10\.100\.29\.2\|...` | 判定"这是校园网认证页"的特征（正则） |
+| `PortalPattern` | `eportal\|dr\.com\|...` | 判定"这是校园网认证页"的特征（正则） |
 | `LogoutUrls` | `/eportal/portal/logout,...` | `relogin` 要试的注销接口，逐个试、每试一个就复查是否真掉线 |
 | `TimeoutSeconds` | `10` | 单个 HTTP 请求超时（秒） |
 | `IntervalMinutes` | `1` | 计划任务检测间隔（分钟），`install` / `setup` 时生效 |
@@ -163,7 +163,7 @@ check 启动
 
 ## 常见问题
 
-**不是这两个门户地址能用吗？** 改 `PortalBase` / `PortalCandidates` 即可。默认候选是西海岸 `http://192.168.101.201:801` 与崂山 `https://10.100.29.2:802`；`auto` 会先按网关重定向自动判断。其他校区请自行测试，欢迎 PR。
+**别的校区/别的门户地址能用吗？** 改 `PortalBase` / `PortalCandidates` 即可。默认候选写在 `config.ini.example` 里；`auto` 会先按网关重定向自动判断。其他校区请自行测试，欢迎 PR。
 
 **为什么脚本文件必须是带 BOM 的 UTF-8？** Windows PowerShell 5.1 在没有 BOM 时按系统 ANSI 代码页（简体中文环境即 GBK）解析脚本，中文会乱码并直接抛"表达式或语句中包含意外的标记"整篇语法错误。仓库已用 `.gitattributes` 固定换行，用编辑器改脚本时请保持 UTF-8 **with BOM**。
 
@@ -174,7 +174,7 @@ check 启动
 ## 已知限制
 
 - **内网地址问题**：某些网络形态（如路由器 NAT 之后）取到的是 `192.168.1.x` 这类地址，门户用它认不到真实客户端，会返回 `AC认证失败`。脚本已优先采用 `IpProbeUrl` 页面上报的地址，但并非所有网络形态都返回。
-- **验证范围有限**：仅在崂山与西海岸两套门户、`OUC-AUTO` 无线下实测过。`OUC-WIFI` 备用链仅在手动断网测试里跑过。
+- **验证范围有限**：仅在两套校园门户、`OUC-AUTO` 无线下实测过。`OUC-WIFI` 备用链仅在手动断网测试里跑过。
 - **明文密码**：`config.ini` 里是明文（`setup` 会尝试用 `icacls` 收紧到仅当前账号可读）。后续可改为 Windows 凭据管理器 / DPAPI。
 - **开机触发**依赖网卡在登录界面阶段就拿到 DHCP；实测可用，但不同机型与驱动可能有差异。
 

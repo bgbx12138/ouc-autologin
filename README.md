@@ -79,10 +79,10 @@ For a fresh copy, start from `config.ini.example`. Missing keys fall back to the
 | `Username` | *(empty)* | Student / staff ID |
 | `Password` | *(empty)* | Campus network password, stored in plain text (see "Security notes") |
 | `PortalBase` | `auto` | `auto` derives the portal from the gateway redirect; or hard-code one portal |
-| `PortalCandidates` | `http://192.168.101.201:801,https://10.100.29.2:802` | Candidate portals tried in order (West Coast first, Laoshan second) |
+| `PortalCandidates` | See `config.ini.example` | Candidate portals tried in order (primary campus first, fallback second) |
 | `IpProbeUrl` | `https://wxrz.ouc.edu.cn/` | Asks the portal "which IP do you see for me?"; the reported address takes precedence over the local one |
 | `CheckUrls` | `http://baidu.com,https://www.apple.com/library/test/success.html` | Connectivity probes; the first one is usually redirected to the captive portal while offline |
-| `PortalPattern` | `eportal\|dr\.com\|10\.100\.29\.2\|...` | Regex that marks a response as "this is the campus portal" |
+| `PortalPattern` | `eportal\|dr\.com\|...` | Regex that marks a response as "this is the campus portal" |
 | `LogoutUrls` | `/eportal/portal/logout,...` | Logout endpoints tried by `relogin`, one by one, re-checking after each |
 | `TimeoutSeconds` | `10` | Timeout for a single HTTP request (seconds) |
 | `IntervalMinutes` | `1` | Probe interval of the scheduled task (minutes); used by `install` / `setup` |
@@ -163,7 +163,7 @@ If `%LOCALAPPDATA%` is unavailable (some non-interactive sessions) the script fa
 
 ## FAQ
 
-**My campus uses different portal addresses. Will it work?** Change `PortalBase` / `PortalCandidates`. The defaults are West Coast `http://192.168.101.201:801` and Laoshan `https://10.100.29.2:802`; `auto` first derives the portal from the gateway redirect. Other campuses are untested — please test and send a PR.
+**My campus uses different portal addresses. Will it work?** Change `PortalBase` / `PortalCandidates`. The default candidates are listed in `config.ini.example`; `auto` first derives the portal from the gateway redirect. Other campuses are untested — please test and send a PR.
 
 **Why must the script file be UTF-8 *with* BOM?** Windows PowerShell 5.1 parses a BOM-less script using the system ANSI code page (GBK on Simplified Chinese systems), which turns every Chinese string into garbage and aborts with "unexpected token". The repository pins line endings in `.gitattributes`; when you edit the script, keep it UTF-8 **with BOM**.
 
@@ -174,7 +174,7 @@ If `%LOCALAPPDATA%` is unavailable (some non-interactive sessions) the script fa
 ## Known limitations
 
 - **Private IP submission** — behind a router doing NAT the script may pick an address such as `192.168.1.x` that the portal cannot map to the real client, which then answers `AC认证失败`. The script already prefers the address reported by `IpProbeUrl`, but not every network returns one.
-- **Limited validation** — only tested against the Laoshan and West Coast portals on the `OUC-AUTO` SSID. The `OUC-WIFI` fallback path is exercised by manual disconnect tests only.
+- **Limited validation** — only tested against two campus portals on the `OUC-AUTO` SSID. The `OUC-WIFI` fallback path is exercised by manual disconnect tests only.
 - **Plain-text password** — `config.ini` stores it in plain text (`setup` tries to tighten it with `icacls`). Windows Credential Manager / DPAPI is a possible follow-up.
 - **Startup trigger** relies on the NIC obtaining DHCP while the machine is at the lock screen. Verified here, but behaviour may differ across machines and drivers.
 
