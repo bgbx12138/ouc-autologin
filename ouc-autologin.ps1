@@ -370,6 +370,14 @@ function Reset-SsidState {
     if ([int]$s.Index -ne 0 -or [int]$s.Tries -ne 0 -or $s.LastAt) { Set-SsidState -Index 0 -Tries 0 -LastAt '' }
 }
 
+# 上次试连无线距现在多少秒；没试过返回 -1。冷却判定与调用方共用，
+# 避免把被冷却挡下的“假尝试”也算进 SSID 轮换次数。
+function Get-WifiAttemptAge {
+    $stamp = Join-Path (Split-Path -Parent $StateFile) 'wifi-attempt.stamp'
+    if (-not (Test-Path -LiteralPath $stamp)) { return -1 }
+    try { return [int](((Get-Date) - (Get-Item -LiteralPath $stamp).LastWriteTime).TotalSeconds) } catch { return -1 }
+}
+
 # 把无线接上。返回 $true 表示无线已经拿到可用地址（可能本来就连着）。
 function Connect-WifiPath {
     param([switch]$Force, [switch]$Reassociate)
@@ -384,14 +392,10 @@ function Connect-WifiPath {
     $ssid = [string]$active.Ssid
     $profile = $ssid
     $stamp = Join-Path (Split-Path -Parent $StateFile) 'wifi-attempt.stamp'
-    if (-not $Force -and (Test-Path -LiteralPath $stamp)) {
-        try {
-            $age = [int](((Get-Date) - (Get-Item -LiteralPath $stamp).LastWriteTime).TotalSeconds)
-            if ($age -lt [int]$Cfg.WifiCooldownSeconds) {
-                Write-Log ("{0} 秒前刚试过连无线没成，冷却 {1} 秒内不再重复试，免得每 2 分钟白折腾一次。" -f $age, $Cfg.WifiCooldownSeconds)
-                return $false
-            }
-        } catch { }
+    $age = Get-WifiAttemptAge
+    if (-not $Force -and $age -ge 0 -and $age -lt [int]$Cfg.WifiCooldownSeconds) {
+        Write-Log ("{0} 秒前刚试过连无线没成，冷却 {1} 秒内不再重复试，免得每 2 分钟白折腾一次。" -f $age, $Cfg.WifiCooldownSeconds)
+        return $false
     }
     if ($adapter.Status -ne 'Up') {
         Write-Log "无线网卡 [$($adapter.Name)] 当前是 $($adapter.Status)，先试着启用它。"
@@ -422,7 +426,7 @@ function Get-CurrentWifiSsid {
     if (-not $r.Text) { return '' }
     foreach ($line in ($r.Text -split "?
 ")) {
-        if ($line -match '^s*SSIDs*:s*(.+?)s*$') { return $Matches[1] }
+        if ($line -match '^\s*SSID\s*:\s*(.+?)\s*$') { return $Matches[1] }
     }
     return ''
 }
@@ -445,7 +449,7 @@ function Show-WifiInfo {
         $chain = (@($Cfg.WifiSsidList)) -join ' -> '
         Write-Host ("切无线开关  : 开（候选链 {0}；本段第 {1} 个 {2}，已试 {3} 次；连续 {4} 次不改观就换下一个）" -f $chain, ([int]$ss.Index + 1), $Cfg.WifiSsidList[[int]$ss.Index], [int]$ss.Tries, [int]$Cfg.WifiSsidSwitchAfter)
         Write-Host "连接参数    : 超时 $($Cfg.WifiConnectTimeoutSeconds) 秒，连不上冷却 $($Cfg.WifiCooldownSeconds) 秒"
-        Write-Host "断线自愈    : 探网不通满 $($Cfg.WifiOfflineGraceSeconds) 秒后断开重连；重复重连冷却 $($Cfg.WifiReassocCooldownSeconds)xn 秒，上限 $($Cfg.WifiReassocCooldownMaxSeconds) 秒"
+        Write-Host "断线自愈    : 探网不通满 $($Cfg.WifiOfflineGraceSeconds) 秒后断开重连；重复重连冷却 $($Cfg.WifiReassocCooldownSeconds) 秒 × n，上限 $($Cfg.WifiReassocCooldownMaxSeconds) 秒"
         Write-Host "快速重试    : 链路不通时每 $($Cfg.WifiWatchIntervalSeconds) 秒复探一次，最多蹲守 $($Cfg.WifiWatchSeconds) 秒（超时上限 $($Cfg.BackoffMaxSeconds) 秒退避）"
         $o = Get-OfflineSince
         if ($o) { Write-Host "离线起点    : $($o.ToString('yyyy-MM-dd HH:mm:ss'))" } else { Write-Host '离线起点    : 无（链路正常，计数已清零）' }
@@ -633,6 +637,11 @@ function Invoke-LinkRecovery {
 
     if (-not $wifiLink.Ok) {
         Write-Log ("探网结果 {0}，无线当前不可用（{1}），走兜底连接，不额外等待。" -f $State, $wifiLink.Detail)
+        $age = Get-WifiAttemptAge
+        if ($age -ge 0 -and $age -lt [int]$Cfg.WifiCooldownSeconds) {
+            Write-Log ("{0} 秒前刚试过连无线没成，冷却 {1} 秒内不再重复试，也不累计换 SSID 的次数。" -f $age, [int]$Cfg.WifiCooldownSeconds)
+            return $false
+        }
         Reset-ReassocState
         $target = Register-WifiAttempt
         if ($Cfg.WifiSsidList.Count -gt 1 -and $target -ne [string]$Cfg.WifiSsid) { Write-Log "这段断网的无线候选改为 [$target]（主 SSID 是 $($Cfg.WifiSsid)）。" }
