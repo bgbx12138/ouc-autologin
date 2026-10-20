@@ -30,6 +30,7 @@ $StateFile = Join-Path $DataRoot 'OUC-AutoLogin\state.json'
 $RecoveryDir = Split-Path -Parent $StateFile
 $OfflineStamp = Join-Path $RecoveryDir 'offline-since.stamp'
 $ReassocFile = Join-Path $RecoveryDir 'wifi-reassoc.json'
+$SsidFile = Join-Path $RecoveryDir 'wifi-ssid.json'
 
 # 校园网门户用的是自签证书，只对配置里列出的门户主机放宽证书校验，其余站点仍按正常规则判断。
 $InsecureHosts = @('10.100.29.2', '192.168.101.201', 'wxrz.ouc.edu.cn')
@@ -70,6 +71,8 @@ function Read-Config {
         WifiFallback     = '1'
         WifiSsid         = 'OUC-AUTO'
         WifiProfile      = 'OUC-AUTO'
+        WifiSsidFallback = 'OUC-WIFI'
+        WifiSsidSwitchAfter       = '2'
         WifiConnectTimeoutSeconds = '25'
         WifiCooldownSeconds       = '300'
         WifiOfflineGraceSeconds       = '100'
@@ -100,6 +103,18 @@ function Read-Config {
     $c.IntervalMinutes = $intInterval
     if (-not $c.WifiSsid) { $c.WifiSsid = 'OUC-AUTO' }
     if (-not $c.WifiProfile) { $c.WifiProfile = $c.WifiSsid }
+    # 无线 SSID 候选链：主 SSID 放最前，后面的 WifiSsidFallback 可写多个（逗号分隔）。
+    # 同一段断网里连续动无线都救不回来时，按这个顺序轮换，避免一直撞同一个到不了门户的 AP。
+    $ssidList = @()
+    foreach ($s in @(@($c.WifiSsid) + @($c.WifiSsidFallback -split ','))) {
+        $t = ([string]$s).Trim()
+        if ($t -and ($ssidList -notcontains $t)) { $ssidList += $t }
+    }
+    if (-not $ssidList) { $ssidList = @('OUC-AUTO') }
+    $c.WifiSsidList = $ssidList
+    $intSwitchAfter = 3
+    if (-not [int]::TryParse($c.WifiSsidSwitchAfter, [ref]$intSwitchAfter) -or $intSwitchAfter -lt 1) { $intSwitchAfter = 3 }
+    $c.WifiSsidSwitchAfter = $intSwitchAfter
     $intWifiTimeout = 25
     if (-not [int]::TryParse($c.WifiConnectTimeoutSeconds, [ref]$intWifiTimeout) -or $intWifiTimeout -lt 5) { $intWifiTimeout = 25 }
     $c.WifiConnectTimeoutSeconds = $intWifiTimeout
@@ -256,16 +271,18 @@ function Get-WifiAdapterOrNull {
 
 # 系统里没有这个无线配置时（重装系统、换网卡），按开放网络生成一份。
 function Ensure-WifiProfile {
-    param([string]$InterfaceName)
+    param([string]$InterfaceName, [string]$Ssid = '', [string]$Profile = '')
+    if (-not $Ssid) { $Ssid = $Cfg.WifiSsid }
+    if (-not $Profile) { $Profile = $Ssid }
     $p = Invoke-Netsh -Arguments @('wlan', 'show', 'profiles')
-    if ($p.Text -and $p.Text.Contains($Cfg.WifiProfile)) { return $true }
-    Write-Log "系统里没有无线配置 [$($Cfg.WifiProfile)]，按开放网络自动生成一份。"
+    if ($p.Text -and $p.Text.Contains($Profile)) { return $true }
+    Write-Log "系统里没有无线配置 [$Profile]，按开放网络自动生成一份。"
     $xml = @"
 <?xml version="1.0"?>
 <WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">
-    <name>$($Cfg.WifiProfile)</name>
+    <name>$($Profile)</name>
     <SSIDConfig>
-        <SSID><name>$($Cfg.WifiSsid)</name></SSID>
+        <SSID><name>$($Ssid)</name></SSID>
     </SSIDConfig>
     <connectionType>ESS</connectionType>
     <connectionMode>manual</connectionMode>
@@ -297,6 +314,62 @@ function Ensure-WifiProfile {
     }
 }
 
+# ── 无线 SSID 候选链的轮换状态（state.json 同目录的 wifi-ssid.json）───────────────
+# Index 指 WifiSsidList 里的第几个；Tries 是这段断网里已经“动无线”的次数。
+function Get-SsidState {
+    $idx = 0
+    $tries = 0
+    $last = ''
+    if (Test-Path -LiteralPath $SsidFile) {
+        try {
+            $o = Get-Content -LiteralPath $SsidFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            $idx = [int]$o.Index
+            $tries = [int]$o.Tries
+            $last = [string]$o.LastAt
+        } catch { }
+    }
+    $list = @($Cfg.WifiSsidList)
+    if ($idx -lt 0 -or $idx -ge $list.Count) { $idx = 0 }
+    return [pscustomobject]@{ Index = $idx; Tries = $tries; LastAt = $last }
+}
+
+function Set-SsidState {
+    param([int]$Index, [int]$Tries, [string]$LastAt)
+    try {
+        New-Item -ItemType Directory -Path $RecoveryDir -Force | Out-Null
+        $o = [pscustomobject]@{ Index = $Index; Tries = $Tries; LastAt = $LastAt }
+        ConvertTo-Json -InputObject $o -Compress | Set-Content -LiteralPath $SsidFile -Encoding UTF8
+    } catch { }
+}
+
+# 当前这段断网里该连哪个 SSID（没触发轮换时就是配置里的主 SSID）。
+function Get-ActiveSsid {
+    $s = Get-SsidState
+    $list = @($Cfg.WifiSsidList)
+    return [pscustomobject]@{ Ssid = [string]$list[[int]$s.Index]; Index = [int]$s.Index; Tries = [int]$s.Tries }
+}
+
+# 记一次“动无线”：连续 WifiSsidSwitchAfter 次都没救回来就把候选轮到下一个，返回本轮要连的 SSID。
+function Register-WifiAttempt {
+    $list = @($Cfg.WifiSsidList)
+    $s = Get-SsidState
+    $tries = [int]$s.Tries + 1
+    $idx = [int]$s.Index
+    if ($list.Count -gt 1 -and $tries -gt [int]$Cfg.WifiSsidSwitchAfter) {
+        $idx = ($idx + 1) % $list.Count
+        $tries = 1
+        Write-Log ("这段断网已连续 {0} 次动无线都没恢复，改试下一个 SSID [{1}]（上一个 {2}）。" -f [int]$Cfg.WifiSsidSwitchAfter, $list[$idx], $list[$s.Index])
+    }
+    Set-SsidState -Index $idx -Tries $tries -LastAt (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+    return [string]$list[$idx]
+}
+
+# 这段断网结束（探到 online / portal）时，SSID 轮换回到主 SSID。
+function Reset-SsidState {
+    $s = Get-SsidState
+    if ([int]$s.Index -ne 0 -or [int]$s.Tries -ne 0 -or $s.LastAt) { Set-SsidState -Index 0 -Tries 0 -LastAt '' }
+}
+
 # 把无线接上。返回 $true 表示无线已经拿到可用地址（可能本来就连着）。
 function Connect-WifiPath {
     param([switch]$Force, [switch]$Reassociate)
@@ -306,6 +379,10 @@ function Connect-WifiPath {
     $now = Test-LinkUsable -Kind 'wifi'
     if ($now.Ok -and -not $Reassociate) { Write-Log "无线本来就能用（$($now.Detail)），不需要重新连接。"; return $true }
     if ($now.Ok -and $Reassociate) { Write-Log "无线自查是好的（$($now.Detail)），但探网结果说链路不通，按强制重新关联处理。" }
+    # 连哪个 SSID 由候选链决定：平时是主 SSID，连续救不回来才轮到下一个。
+    $active = Get-ActiveSsid
+    $ssid = [string]$active.Ssid
+    $profile = $ssid
     $stamp = Join-Path (Split-Path -Parent $StateFile) 'wifi-attempt.stamp'
     if (-not $Force -and (Test-Path -LiteralPath $stamp)) {
         try {
@@ -325,9 +402,9 @@ function Connect-WifiPath {
         New-Item -ItemType Directory -Path (Split-Path -Parent $stamp) -Force | Out-Null
         Set-Content -LiteralPath $stamp -Value (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') -Encoding UTF8
     } catch { }
-    if (-not (Ensure-WifiProfile -InterfaceName $adapter.Name)) { return $false }
-    Write-Log "正在连接无线 [$($Cfg.WifiSsid)]（网卡 $($adapter.Name)）…"
-    $res = Invoke-Netsh -Arguments @('wlan', 'connect', ('name=' + $Cfg.WifiProfile), ('ssid=' + $Cfg.WifiSsid), ('interface=' + $adapter.Name))
+    if (-not (Ensure-WifiProfile -InterfaceName $adapter.Name -Ssid $ssid -Profile $profile)) { return $false }
+    Write-Log ("正在连接无线 [{0}]（网卡 {1}；候选链 {2}，本段已试 {3} 次）…" -f $ssid, $adapter.Name, (@($Cfg.WifiSsidList) -join ' -> '), [int]$active.Tries)
+    $res = Invoke-Netsh -Arguments @('wlan', 'connect', ('name=' + $profile), ('ssid=' + $ssid), ('interface=' + $adapter.Name))
     Write-Log ('连接请求：' + (Clear-Brief $res.Text))
     $deadline = (Get-Date).AddSeconds([int]$Cfg.WifiConnectTimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
@@ -335,8 +412,19 @@ function Connect-WifiPath {
         $w = Test-LinkUsable -Kind 'wifi'
         if ($w.Ok) { Write-Log "无线已连上并拿到默认路由（$($w.Detail)），接着走原来的认证流程。"; return $true }
     }
-    Write-Log ("等了 {0} 秒，无线还是没拿到可用地址（可能不在 {1} 覆盖范围内）。" -f $Cfg.WifiConnectTimeoutSeconds, $Cfg.WifiSsid)
+    Write-Log ("等了 {0} 秒，无线 [{1}] 还是没拿到可用地址（可能不在覆盖范围内）。" -f $Cfg.WifiConnectTimeoutSeconds, $ssid)
     return $false
+}
+
+# 网卡当前实际关联的 SSID，和候选链里“本段该用第几个”是两件事，显示时分开放。
+function Get-CurrentWifiSsid {
+    $r = Invoke-Netsh -Arguments @('wlan', 'show', 'interfaces')
+    if (-not $r.Text) { return '' }
+    foreach ($line in ($r.Text -split "?
+")) {
+        if ($line -match '^s*SSIDs*:s*(.+?)s*$') { return $Matches[1] }
+    }
+    return ''
 }
 
 function Show-WifiInfo {
@@ -348,10 +436,15 @@ function Show-WifiInfo {
     if ($r) { Write-Host "当前出口    : $($r.InterfaceAlias)（接口度量 $($r.InterfaceMetric)）" } else { Write-Host '当前出口    : 没有默认路由' }
     $a = Get-WifiAdapterOrNull
     if ($a) { Write-Host "无线网卡    : $($a.Name) — $($a.Status)" } else { Write-Host '无线网卡    : 没有' }
+    $cur = Get-CurrentWifiSsid
+    if ($cur) { Write-Host "当前 SSID   : $cur" }
     $p = Invoke-Netsh -Arguments @('wlan', 'show', 'profiles')
     if ($p.Text -and $p.Text.Contains($Cfg.WifiProfile)) { Write-Host "无线配置    : $($Cfg.WifiProfile)（已存在）" } else { Write-Host "无线配置    : $($Cfg.WifiProfile)（缺失，连接时会自动生成）" }
     if ($Cfg.WifiFallback -eq '1') {
-        Write-Host "切无线开关  : 开（SSID $($Cfg.WifiSsid)，连接超时 $($Cfg.WifiConnectTimeoutSeconds) 秒，失败冷却 $($Cfg.WifiCooldownSeconds) 秒）"
+        $ss = Get-SsidState
+        $chain = (@($Cfg.WifiSsidList)) -join ' -> '
+        Write-Host ("切无线开关  : 开（候选链 {0}；本段第 {1} 个 {2}，已试 {3} 次；连续 {4} 次不改观就换下一个）" -f $chain, ([int]$ss.Index + 1), $Cfg.WifiSsidList[[int]$ss.Index], [int]$ss.Tries, [int]$Cfg.WifiSsidSwitchAfter)
+        Write-Host "连接参数    : 超时 $($Cfg.WifiConnectTimeoutSeconds) 秒，连不上冷却 $($Cfg.WifiCooldownSeconds) 秒"
         Write-Host "断线自愈    : 探网不通满 $($Cfg.WifiOfflineGraceSeconds) 秒后断开重连；重复重连冷却 $($Cfg.WifiReassocCooldownSeconds)xn 秒，上限 $($Cfg.WifiReassocCooldownMaxSeconds) 秒"
         Write-Host "快速重试    : 链路不通时每 $($Cfg.WifiWatchIntervalSeconds) 秒复探一次，最多蹲守 $($Cfg.WifiWatchSeconds) 秒（超时上限 $($Cfg.BackoffMaxSeconds) 秒退避）"
         $o = Get-OfflineSince
@@ -512,11 +605,17 @@ function Set-ReassocInfo {
     } catch { }
 }
 
-# 一次不通的“这段断网”结束了，把自愈计数清零。
-function Reset-RecoveryState {
+# 只清“这段断网”的重连计数与离线起点（SSID 轮换状态保留，否则轮不到下一个 SSID）。
+function Reset-ReassocState {
     try { Remove-Item -LiteralPath $OfflineStamp -Force -ErrorAction SilentlyContinue } catch { }
     $r = Get-ReassocInfo
     if ([int]$r.Attempts -ne 0 -or $r.LastAt) { Set-ReassocInfo -Attempts 0 -LastAt '' }
+}
+
+# 一次不通的“这段断网”结束了，把自愈计数与 SSID 轮换一起归零（下一个断网仍从主 SSID 开始）。
+function Reset-RecoveryState {
+    Reset-ReassocState
+    Reset-SsidState
 }
 
 # 链路自愈。只有探网结果（Get-NetworkState）说链路不通（unknown / linkdown）时才会走到这里：
@@ -534,7 +633,9 @@ function Invoke-LinkRecovery {
 
     if (-not $wifiLink.Ok) {
         Write-Log ("探网结果 {0}，无线当前不可用（{1}），走兜底连接，不额外等待。" -f $State, $wifiLink.Detail)
-        Reset-RecoveryState
+        Reset-ReassocState
+        $target = Register-WifiAttempt
+        if ($Cfg.WifiSsidList.Count -gt 1 -and $target -ne [string]$Cfg.WifiSsid) { Write-Log "这段断网的无线候选改为 [$target]（主 SSID 是 $($Cfg.WifiSsid)）。" }
         return (Connect-WifiPath)
     }
 
@@ -564,7 +665,8 @@ function Invoke-LinkRecovery {
     }
 
     $attempts = [int]$rs.Attempts + 1
-    Write-Log ("探网结果 {0}，无线自查「能用」但链路不通，第 {1} 次强制重新关联无线 [{2}]。" -f $State, $attempts, $Cfg.WifiSsid)
+    $target = Register-WifiAttempt
+    Write-Log ("探网结果 {0}，无线自查「能用」但链路不通，第 {1} 次强制重新关联无线 [{2}]。" -f $State, $attempts, $target)
     Set-ReassocInfo -Attempts $attempts -LastAt $now.ToString('yyyy-MM-dd HH:mm:ss')
     $d = Invoke-Netsh -Arguments @('wlan', 'disconnect', ('interface=' + $adapter.Name))
     Write-Log ('断开无线：' + (Clear-Brief $d.Text))
@@ -1000,7 +1102,7 @@ try {
   relogin      先注销再重登，把密码验到底（会断网 5～10 秒）
   status       看配置、计划任务状态、当前网络判定和最近日志
   wifi         只看有线/无线链路、无线配置和当前出口（不改动任何东西）
-  wifi-connect 立刻尝试连接无线 OUC-AUTO，用来验证“有线不通切无线”这条路
+  wifi-connect 立刻尝试连接无线（主 SSID OUC-AUTO，连续救不回来会轮到 OUC-WIFI），用来验证“有线不通切无线”这条路
   logs         看日志，可加 -Tail 50
   install      只装/改计划任务，可加 -IntervalMinutes 5
   uninstall    删除计划任务

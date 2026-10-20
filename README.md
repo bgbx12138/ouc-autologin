@@ -16,7 +16,7 @@ A PowerShell script driven by Windows Task Scheduler. It probes the network on a
 - **No resident process** — the scheduled task launches it every N minutes and it exits within seconds. It is started through wscript + launcher.vbs so no console window ever flashes.
 - **Unattended** — the scheduled task uses an S4U logon type: no Windows password is stored and you do not need to be logged in. It runs right after boot, while the machine sits at the lock screen.
 - **Probes the network instead of trusting the NIC** — it requests baidu.com and Apple's success.html by default and classifies the result as online / portal / linkdown / unknown from the real HTTP responses.
-- **Ethernet first, Wi-Fi fallback** — when Ethernet has no usable default route it connects to the campus SSID (OUC-AUTO by default); when Ethernet comes back, Windows interface metrics switch back automatically.
+- **Ethernet first, Wi-Fi fallback** — when Ethernet has no usable default route it connects to the campus SSID (OUC-AUTO by default); when Ethernet comes back, Windows interface metrics switch back automatically. If repeated reconnects on that SSID still fail, it rotates to the fallback SSID from `WifiSsidFallback`.
 - **Self-healing** — if the Wi-Fi association is dead but Windows still reports "connected" with a stale IP and default route, the script only forces a disconnect + reconnect after the probe has failed continuously for N seconds, with an increasing cooldown so brief flaps are not punished.
 - **Fast retry window** — once the link is considered broken it does not wait for the next scheduler tick: it re-probes every 10 seconds for up to 4 minutes and completes the authentication on the spot as soon as the portal answers again.
 - **Backoff without friendly fire** — repeated authentication failures back off exponentially (cap configurable), while a portal that answers nothing at all (HTTP 0, link unreachable) does not count as a failure, so the anti-lockout counter is not wasted on outages.
@@ -95,10 +95,14 @@ For a fresh copy, start from `config.ini.example`. Missing keys fall back to the
 | `WifiFallback` | `1` | Master switch: connect to Wi-Fi automatically when Ethernet is unusable |
 | `WifiSsid` | `OUC-AUTO` | Campus Wi-Fi SSID |
 | `WifiProfile` | `OUC-AUTO` | Name of that SSID's profile in Windows (usually the same as the SSID) |
+| `WifiSsidFallback` | `OUC-WIFI` | Fallback SSID(s), comma-separated. After `WifiSsidSwitchAfter` consecutive reconnects inside one outage still do not bring the link back, the script moves to the next SSID |
+| `WifiSsidSwitchAfter` | `2` | Consecutive failed reconnects before rotating to the next SSID |
 | `WifiConnectTimeoutSeconds` | `25` | How long to wait after a connect request before giving up |
 | `WifiCooldownSeconds` | `300` | Cooldown after a failed connect (seconds), so no run waits forever |
 
 **"Ethernet is unusable"** means the Ethernet adapter has **no default route** — either no cable, or a cable with no DHCP lease (only a `169.254.x.x` APIPA address). While Ethernet is healthy the script never touches Wi-Fi.
+
+SSID rotation is scoped to one outage: as soon as a probe returns `online` or `portal`, the next outage starts from the primary `WifiSsid` again.
 
 ### Self-healing and retry pacing
 
@@ -130,7 +134,7 @@ check starts
       ├─ portal ──────────────→ portal login → re-check → exit
       └─ unknown / linkdown
            └─ Invoke-LinkRecovery
-                ├─ Wi-Fi unusable ──→ connect OUC-AUTO
+                ├─ Wi-Fi unusable ──→ connect OUC-AUTO (rotates OUC-AUTO ⇄ OUC-WIFI)
                 └─ Wi-Fi "looks usable" → grace period → disconnect + reconnect (cooldown ×n)
                      └─ Invoke-OfflineWatch: re-probe every 10s, up to 240s
                           ├─ online → exit
@@ -170,7 +174,7 @@ If `%LOCALAPPDATA%` is unavailable (some non-interactive sessions) the script fa
 ## Known limitations
 
 - **Private IP submission** — behind a router doing NAT the script may pick an address such as `192.168.1.x` that the portal cannot map to the real client, which then answers `AC认证失败`. The script already prefers the address reported by `IpProbeUrl`, but not every network returns one.
-- **Limited validation** — only tested against the Laoshan and West Coast portals on the `OUC-AUTO` SSID.
+- **Limited validation** — only tested against the Laoshan and West Coast portals on the `OUC-AUTO` SSID. The `OUC-WIFI` fallback path is exercised by manual disconnect tests only.
 - **Plain-text password** — `config.ini` stores it in plain text (`setup` tries to tighten it with `icacls`). Windows Credential Manager / DPAPI is a possible follow-up.
 - **Startup trigger** relies on the NIC obtaining DHCP while the machine is at the lock screen. Verified here, but behaviour may differ across machines and drivers.
 

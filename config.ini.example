@@ -1,4 +1,4 @@
-﻿# 中国海洋大学校园网自动登录 —— 配置模板
+﻿﻿# 中国海洋大学校园网自动登录 —— 配置模板
 # 使用方法：把本文件复制成 config.ini，填上自己的学号与密码即可（也可直接跑 setup 命令）。
 # 格式：键 = 值。以 # 或 ; 开头的行是注释。改完直接保存，不用重启任务。
 # 注意：config.ini 里存的是明文密码，别拷给别人、别放进网盘或 git（仓库已把 config.ini 加进 .gitignore）。
@@ -46,6 +46,12 @@ WifiFallback = 1
 # 校园网无线 SSID，以及它在 Windows 里的无线配置文件名字（一般两者一样）
 WifiSsid = OUC-AUTO
 WifiProfile = OUC-AUTO
+
+# 备用 SSID 候选链（2026-10-20 新增，逗号分隔可写多个）。
+# 同一段断网里连续动无线 WifiSsidSwitchAfter 次都没恢复，就轮到下一个；
+# 探到 online / 认证页后回到 WifiSsid 主 SSID。OUC-AUTO 的某些 AP 段能发地址但到不了门户，这时要用 OUC-WIFI。
+WifiSsidFallback = OUC-WIFI
+WifiSsidSwitchAfter = 2
 
 # 发出连接请求后最多等多少秒判定没连上
 WifiConnectTimeoutSeconds = 25
