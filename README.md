@@ -173,6 +173,12 @@ If `%LOCALAPPDATA%` is unavailable (some non-interactive sessions) the script fa
 
 **Will this look like abnormal traffic to the campus network?** In steady state it is one HTTP probe per minute; only during an outage does it retry quickly. That is comparable to refreshing a web page by hand.
 
+## Changelog
+
+- **v2026.11.01** — [release notes](https://github.com/bgbx12138/ouc-autologin/releases/tag/v2026.11.01): the Wi-Fi profile is kept on *Connect automatically* (existing manual profiles are corrected), DNS resolution of each probe is bounded by `DnsTimeoutSeconds`, and a tick that finds the single-instance lock busy now says so in the log.
+- **2026-10-20** — SSID fallback chain (`WifiSsidFallback` / `WifiSsidSwitchAfter`), active-SSID detection fix, and README portal examples trimmed.
+- **2026-10-15** — first public release: Ethernet-first with Wi-Fi fallback, self-healing reconnect, fast retry window.
+
 ## Known limitations
 
 - **Private IP submission** — behind a router doing NAT the script may pick an address such as `192.168.1.x` that the portal cannot map to the real client, which then answers `AC认证失败`. The script already prefers the address reported by `IpProbeUrl`, but not every network returns one.
