@@ -31,6 +31,10 @@ PortalPattern = eportal|dr\.com|10\.100\.29\.2|192\.168\.101\.201|wxrz\.ouc\.edu
 # 单个 HTTP 请求超时（秒）
 TimeoutSeconds = 10
 
+# DNS 解析超时（秒）：开机时 DNS 往往还没就绪，解析会拖几分钟并把整轮检测卡住，
+# 超过这个时间就当这条检测地址失败，换下一条。设为 0 关闭这项限制。
+DnsTimeoutSeconds = 2
+
 # 常驻计划任务的检测间隔（分钟），install / setup 时生效
 IntervalMinutes = 1
 

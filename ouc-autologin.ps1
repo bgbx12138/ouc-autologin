@@ -65,6 +65,7 @@ function Read-Config {
         CheckUrls        = 'http://baidu.com,https://www.apple.com/library/test/success.html'
         PortalPattern    = 'eportal|dr\.com|10\.100\.29\.2|192\.168\.101\.201|wxrz\.ouc\.edu\.cn'
         TimeoutSeconds   = '10'
+        DnsTimeoutSeconds = '2'
         IntervalMinutes  = '2'
         NotifyOnFailure  = '1'
         LogoutUrls       = '/eportal/portal/logout,/eportal/?c=ACSetting&a=Logout&ver=1.0'
@@ -98,6 +99,9 @@ function Read-Config {
     $intTimeout = 10
     if (-not [int]::TryParse($c.TimeoutSeconds, [ref]$intTimeout) -or $intTimeout -lt 3) { $intTimeout = 10 }
     $c.TimeoutSeconds = $intTimeout
+    $intDns = 2
+    if (-not [int]::TryParse($c.DnsTimeoutSeconds, [ref]$intDns) -or $intDns -lt 1 -or $intDns -gt 10) { $intDns = 2 }
+    $c.DnsTimeoutSeconds = $intDns
     $intInterval = 2
     if (-not [int]::TryParse($c.IntervalMinutes, [ref]$intInterval) -or $intInterval -lt 1) { $intInterval = 2 }
     $c.IntervalMinutes = $intInterval
@@ -147,6 +151,18 @@ function Invoke-Http {
     $r = @{ Status = 0; Body = ''; Location = ''; Error = '' }
     $resp = $null
     $limit = if ($TimeoutSec -gt 0) { $TimeoutSec } else { $Cfg.TimeoutSeconds }
+    # 只给域名时先做一次有上限的 DNS 解析：HttpWebRequest.Timeout 只管 HTTP 阶段，管不到解析，
+    # 开机时 DNS 全不可达会解析好几分钟，把一整轮探测拖死。
+    try {
+        $probeUri = [Uri]$Url
+        if ($probeUri.HostNameType -eq [UriHostNameType]::Dns -and [int]$Cfg.DnsTimeoutSeconds -gt 0) {
+            $dnsTask = [Net.Dns]::GetHostAddressesAsync($probeUri.Host)
+            if (-not $dnsTask.Wait([int]$Cfg.DnsTimeoutSeconds * 1000)) {
+                $r.Error = ('DNS 解析超时（{0} 秒）：{1}' -f $Cfg.DnsTimeoutSeconds, $probeUri.Host)
+                return $r
+            }
+        }
+    } catch { }
     try {
         $req = [Net.HttpWebRequest]::Create($Url)
         $req.Method = 'GET'
@@ -270,12 +286,33 @@ function Get-WifiAdapterOrNull {
 }
 
 # 系统里没有这个无线配置时（重装系统、换网卡），按开放网络生成一份。
+# 把已有无线配置改成「自动连接」：开机由 Windows 直接关联，不再等脚本 tick 去连。
+function Set-WifiProfileAuto {
+    param([string]$Profile)
+    if (-not $Profile) { return $false }
+    $cur = Invoke-Netsh -Arguments @('wlan', 'show', 'profile', ('name=' + $Profile))
+    $isManual = $cur.Text -and ($cur.Text -match '(?i)connection mode\s*:\s*(connect manually|manual)|连接模式\s*[:：]\s*(手动|手动连接)')
+    $isAuto = $cur.Text -and ($cur.Text -match '(?i)connection mode\s*:\s*(automatic|auto|connect automatically)|连接模式\s*[:：]\s*(自动|自动连接)')
+    if ($isAuto -and -not $isManual) { return $true }
+    $res = Invoke-Netsh -Arguments @('wlan', 'set', 'profileparameter', ('name=' + $Profile), 'connectionmode=auto')
+    if ($res.Ok) {
+        if ($isManual) { Write-Log "无线配置 [$Profile] 原来是手动连接，已改成自动连接（开机直接关联）。" }
+        return $true
+    }
+    Write-Log ('把无线配置 [{0}] 改成自动连接失败：{1}' -f $Profile, (Clear-Brief $res.Text))
+    return $false
+}
+
 function Ensure-WifiProfile {
     param([string]$InterfaceName, [string]$Ssid = '', [string]$Profile = '')
     if (-not $Ssid) { $Ssid = $Cfg.WifiSsid }
     if (-not $Profile) { $Profile = $Ssid }
     $p = Invoke-Netsh -Arguments @('wlan', 'show', 'profiles')
-    if ($p.Text -and $p.Text.Contains($Profile)) { return $true }
+    if ($p.Text -and $p.Text.Contains($Profile)) {
+        # 老配置可能是「手动连接」，那样开机 Windows 不会自己连，顺手改成自动。
+        Set-WifiProfileAuto -Profile $Profile
+        return $true
+    }
     Write-Log "系统里没有无线配置 [$Profile]，按开放网络自动生成一份。"
     $xml = @"
 <?xml version="1.0"?>
@@ -285,7 +322,7 @@ function Ensure-WifiProfile {
         <SSID><name>$($Ssid)</name></SSID>
     </SSIDConfig>
     <connectionType>ESS</connectionType>
-    <connectionMode>manual</connectionMode>
+    <connectionMode>auto</connectionMode>
     <MSM>
         <security>
             <authEncryption>
@@ -437,7 +474,12 @@ function Show-WifiInfo {
     if ($wired.Ok) { Write-Host "有线链路    : 可用 — $($wired.Detail)" } else { Write-Host "有线链路    : 不可用 — $($wired.Detail)" }
     if ($wifi.Ok) { Write-Host "无线链路    : 可用 — $($wifi.Detail)" } else { Write-Host "无线链路    : 不可用 — $($wifi.Detail)" }
     $r = Get-ActiveRoute
-    if ($r) { Write-Host "当前出口    : $($r.InterfaceAlias)（接口度量 $($r.InterfaceMetric)）" } else { Write-Host '当前出口    : 没有默认路由' }
+    if ($r) {
+        # 有些虚拟网卡（代理 TUN）不回报 InterfaceMetric，别显示成空的。
+        $im = "$($r.InterfaceMetric)"
+        if (-not $im) { $im = '未知' }
+        Write-Host "当前出口    : $($r.InterfaceAlias)（接口度量 $im）"
+    } else { Write-Host '当前出口    : 没有默认路由' }
     $a = Get-WifiAdapterOrNull
     if ($a) { Write-Host "无线网卡    : $($a.Name) — $($a.Status)" } else { Write-Host '无线网卡    : 没有' }
     $cur = Get-CurrentWifiSsid
@@ -1059,10 +1101,13 @@ function Enter-Lock {
         if (-not $created) {
             $m.Dispose()
             if (-not $Quiet) { Write-Host '已有另一个检测在跑，本次跳过。' }
+            Write-Log '已有另一个检测在跑，本次跳过。'
             return $false
         }
         $script:Mutex = $m
-        return $m.WaitOne([TimeSpan]::FromSeconds(30))
+        $got = $m.WaitOne([TimeSpan]::FromSeconds(30))
+        if (-not $got) { Write-Log '等锁 30 秒仍被占用，本次跳过。' }
+        return $got
     } catch {
         # 命名互斥量在某些受限会话里建不出来，不该因此就不去登录。
         return $true

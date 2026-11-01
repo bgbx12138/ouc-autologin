@@ -20,7 +20,8 @@ A PowerShell script driven by Windows Task Scheduler. It probes the network on a
 - **Self-healing** — if the Wi-Fi association is dead but Windows still reports "connected" with a stale IP and default route, the script only forces a disconnect + reconnect after the probe has failed continuously for N seconds, with an increasing cooldown so brief flaps are not punished.
 - **Fast retry window** — once the link is considered broken it does not wait for the next scheduler tick: it re-probes every 10 seconds for up to 4 minutes and completes the authentication on the spot as soon as the portal answers again.
 - **Backoff without friendly fire** — repeated authentication failures back off exponentially (cap configurable), while a portal that answers nothing at all (HTTP 0, link unreachable) does not count as a failure, so the anti-lockout counter is not wasted on outages.
-- **Single instance** — a named mutex guarantees two logins never run at the same time.
+- **Single instance** — a named mutex guarantees two logins never run at the same time; a run that finds another one already in flight now records that in the log instead of exiting silently.
+- **Bounded startup cost** — the Wi-Fi profile is kept on *Connect automatically* (the script flips it itself, including profiles created by older versions), so Windows joins the SSID at boot without waiting for a scheduled tick, and a probe can no longer stall for minutes on DNS: resolution of each probe host is capped by `DnsTimeoutSeconds`.
 
 ## Requirements
 
@@ -85,6 +86,7 @@ For a fresh copy, start from `config.ini.example`. Missing keys fall back to the
 | `PortalPattern` | `eportal\|dr\.com\|...` | Regex that marks a response as "this is the campus portal" |
 | `LogoutUrls` | `/eportal/portal/logout,...` | Logout endpoints tried by `relogin`, one by one, re-checking after each |
 | `TimeoutSeconds` | `10` | Timeout for a single HTTP request (seconds) |
+| `DnsTimeoutSeconds` | `2` | Cap on resolving a probe host name (seconds); `0` disables the cap. Kept short because `TimeoutSeconds` only covers the HTTP stage |
 | `IntervalMinutes` | `1` | Probe interval of the scheduled task (minutes); used by `install` / `setup` |
 | `NotifyOnFailure` | `1` | Show a tray balloon after repeated authentication failures (1 = yes, 0 = log only) |
 
